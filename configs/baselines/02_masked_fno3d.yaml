@@ -1,0 +1,37 @@
+# Masked-FNO3D Official Baseline Configuration
+exp_name: "02_masked_fno3d"
+model_name: "masked_fno3d"
+
+# Data & Spatial Resolution
+data_root: "data/foil"
+grid_h: 64
+grid_w: 128
+in_step: 20
+out_step: 20
+interval: 5
+
+# Sensor Topology & Sparsity
+num_sensors: 64
+sensor_topology: "wall"
+
+# Model Architecture
+modes1: 8
+modes2: 8
+modes3: 8
+fno_width: 32
+n_layers: 4
+
+# Training Protocol
+batch_size: 8
+weight_decay: 0.0001
+clip_grad_norm: 1.0
+patience: 10
+
+# Stage 1: Sim Pre-training
+sim_epochs: 100
+sim_lr: 0.0005
+
+# Stage 2: Few-shot Real Fine-tuning
+real_epochs: 50
+real_lr: 0.0001
+few_shot_k: 3

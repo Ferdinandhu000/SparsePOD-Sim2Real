@@ -1,0 +1,44 @@
+# Flagship SOTA Architecture: POD-ResUNet3D-Sparse
+exp_name: "01_pod_res_unet3d_sparse"
+model_name: "pod_res_unet3d"
+
+# Data & Spatial Resolution
+data_root: "data/foil"
+grid_h: 64
+grid_w: 128
+in_step: 20
+out_step: 20
+interval: 5
+
+# Sensor Topology & Sparsity
+num_sensors: 64
+sensor_topology: "wall"  # wall | uniform | wake_rake | random
+
+# POD & Subspace Warping Configuration
+pod_rank: 64
+reg_lambda: 0.0001
+use_warping: true        # Learnable Grassmannian alignment matrix W_align
+residual_weight: 1.0
+
+# 23M UNet3D Spatio-Temporal Residual Backbone
+unet_dim: 64
+dim_mults: [1, 2, 4]
+
+# Optimization
+batch_size: 8
+weight_decay: 0.0001
+clip_grad_norm: 1.0
+patience: 10
+
+# Physics-informed Loss Weights
+v_weight: 2.0
+vorticity_weight: 0.1
+
+# Stage 1: Sim Pre-training
+sim_epochs: 100
+sim_lr: 0.0002
+
+# Stage 2: Few-shot Real Fine-tuning
+real_epochs: 50
+real_lr: 0.0001
+few_shot_k: 3

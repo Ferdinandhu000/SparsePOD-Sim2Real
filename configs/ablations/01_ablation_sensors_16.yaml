@@ -1,0 +1,28 @@
+# Sensor Count Ablation: 16 Sensors
+exp_name: "ablation_sensors_16"
+model_name: "pod_res_unet3d"
+data_root: "data/foil"
+grid_h: 64
+grid_w: 128
+in_step: 20
+out_step: 20
+interval: 5
+
+num_sensors: 16
+sensor_topology: "wall"
+
+pod_rank: 64
+reg_lambda: 0.0001
+use_warping: true
+residual_weight: 1.0
+
+unet_dim: 64
+dim_mults: [1, 2, 4]
+batch_size: 8
+patience: 10
+
+sim_epochs: 100
+sim_lr: 0.0002
+real_epochs: 50
+real_lr: 0.0001
+few_shot_k: 3

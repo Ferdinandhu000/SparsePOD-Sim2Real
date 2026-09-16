@@ -1,0 +1,24 @@
+# Classical Gappy-POD Zero-shot Baseline Configuration
+exp_name: "03_classical_gappy_pod"
+model_name: "classical_gappy_pod"
+
+# Data & Spatial Resolution
+data_root: "data/foil"
+grid_h: 64
+grid_w: 128
+in_step: 20
+out_step: 20
+interval: 10
+
+# Sensor Topology & Sparsity
+num_sensors: 64
+sensor_topology: "wall"
+
+# POD Hyperparameters
+pod_rank: 64
+reg_lambda: 0.0001
+
+# No deep training needed for classical analytical baseline
+sim_epochs: 0
+real_epochs: 0
+batch_size: 8

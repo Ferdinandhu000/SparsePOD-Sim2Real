@@ -1,0 +1,279 @@
+from __future__ import annotations
+
+import argparse
+import datetime
+import json
+import logging
+import os
+from pathlib import Path
+import shutil
+import sys
+import time
+from typing import Dict, Optional, Tuple
+
+import numpy as np
+import torch
+import torch.nn as nn
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import CosineAnnealingLR, StepLR
+from tqdm import tqdm
+import yaml
+
+from ..data.dataset import SparseTrajectoryDataset, create_dataloaders
+from ..data.normalizer import GaussianNormalizer, IdentityNormalizer
+from ..model import load_model
+from .losses import CompositePhysicalLoss, relative_l2_per_sample
+from .metrics import compute_metrics
+
+
+def setup_logger(log_file: Path) -> logging.Logger:
+    logger = logging.getLogger(log_file.stem)
+    logger.setLevel(logging.INFO)
+    logger.handlers = []
+
+    formatter = logging.Formatter("[%(asctime)s][%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+
+    fh = logging.FileHandler(log_file, encoding="utf-8")
+    fh.setFormatter(formatter)
+    logger.addHandler(fh)
+
+    ch = logging.StreamHandler(sys.stdout)
+    ch.setFormatter(formatter)
+    logger.addHandler(ch)
+
+    return logger
+
+
+class Sim2RealTrainer:
+    def __init__(self, config: Dict, device: Optional[torch.device] = None):
+        self.config = config
+        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.data_root = Path(config.get("data_root", "data/foil"))
+
+        # Setup run directories
+        self.exp_name = config.get("exp_name", "sim2real_run")
+        self.output_dir = Path(config.get("output_dir", "artifacts/runs")) / self.exp_name
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.best_checkpoint_dir = Path(config.get("best_checkpoints_dir", "best_checkpoints")) / self.exp_name
+        self.best_checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+        self.logger = setup_logger(self.output_dir / "train.log")
+        self.logger.info(f"Initialized Sim2RealTrainer on device: {self.device}")
+        self.logger.info(f"Output directory: {self.output_dir}")
+
+        # Load or create POD basis
+        self.pod_basis = self._load_pod_basis()
+
+        # Build model and get sensor indices
+        self.num_sensors = config.get("num_sensors", 64)
+        self.sensor_topology = config.get("sensor_topology", "wall")
+        temp_ds = SparseTrajectoryDataset(
+            data_root=self.data_root,
+            dataset_type="numerical",
+            topology_type=self.sensor_topology,
+            num_sensors=self.num_sensors,
+            pod_basis=self.pod_basis,
+        )
+        self.sensor_indices = temp_ds.sensor_op.indices_1d.to(self.device)
+
+        self.model = load_model(config, pod_basis=self.pod_basis, sensor_indices=self.sensor_indices).to(self.device)
+        self.loss_fn = CompositePhysicalLoss(
+            v_weight=config.get("v_weight", 2.0),
+            vorticity_weight=config.get("vorticity_weight", 0.1),
+        )
+
+    def _load_pod_basis(self) -> Optional[torch.Tensor]:
+        pod_path = self.config.get("pod_basis_path", None)
+        if pod_path is None:
+            # Check default locations
+            candidates = [
+                self.data_root / "pod_basis_64x128.pt",
+                self.data_root / "pod_basis.pt",
+                Path("data/pod_basis_64x128.pt"),
+            ]
+            for cand in candidates:
+                if cand.exists():
+                    pod_path = str(cand)
+                    break
+
+        if pod_path and Path(pod_path).exists():
+            self.logger.info(f"Loading POD basis from {pod_path}")
+            basis = torch.load(pod_path, map_location=self.device)
+            if isinstance(basis, dict) and "basis" in basis:
+                basis = basis["basis"]
+            return basis.float()
+
+        # Generate dummy orthogonal basis if not yet computed (for smoke test/init)
+        self.logger.warning("POD basis not found on disk. Generating random orthonormal basis.")
+        m = 64 * 128 * 2
+        k = self.config.get("pod_rank", 64)
+        q, _ = torch.linalg.qr(torch.randn(m, k, device=self.device))
+        return q.float()
+
+    def train_epoch(self, dataloader, optimizer, is_real_finetuning: bool = False) -> Dict[str, float]:
+        self.model.train()
+        total_loss = 0.0
+        n_batches = 0
+
+        for batch in dataloader:
+            # Move tensors to device
+            for k in batch:
+                if isinstance(batch[k], torch.Tensor):
+                    batch[k] = batch[k].to(self.device)
+
+            optimizer.zero_grad()
+            pred = self.model(batch)  # [B, Tout, H, W, 2]
+            target = batch["y_full"]  # [B, Tout, H, W, 2]
+
+            loss, loss_dict = self.loss_fn(
+                pred, target, sensor_indices=self.sensor_indices, model=self.model, is_real_finetuning=is_real_finetuning
+            )
+            loss.backward()
+
+            clip_grad = self.config.get("clip_grad_norm", 1.0)
+            if clip_grad > 0:
+                nn.utils.clip_grad_norm_(self.model.parameters(), clip_grad)
+
+            optimizer.step()
+            total_loss += loss.item()
+            n_batches += 1
+
+        return {"train_loss": total_loss / max(1, n_batches)}
+
+    @torch.no_grad()
+    def evaluate(self, dataloader) -> Dict[str, float]:
+        self.model.eval()
+        preds = []
+        targets = []
+
+        for batch in dataloader:
+            for k in batch:
+                if isinstance(batch[k], torch.Tensor):
+                    batch[k] = batch[k].to(self.device)
+
+            pred = self.model(batch)
+            preds.append(pred.cpu())
+            targets.append(batch["y_full"].cpu())
+
+        if not preds:
+            return {"rel_l2": 1.0, "rmse": 1.0}
+
+        all_preds = torch.cat(preds, dim=0)
+        all_targets = torch.cat(targets, dim=0)
+        return compute_metrics(all_preds, all_targets)
+
+    def fit_stage(
+        self,
+        stage_name: str,
+        train_dataset_type: str,
+        few_shot_k: Optional[int],
+        epochs: int,
+        lr: float,
+        save_name: str,
+    ) -> float:
+        self.logger.info(f"=== Starting {stage_name}: {train_dataset_type.upper()} (Few-shot K={few_shot_k}) ===")
+
+        stage_cfg = dict(self.config)
+        stage_cfg["dataset_type"] = train_dataset_type
+        stage_cfg["few_shot_k"] = few_shot_k
+
+        train_loader, val_loader, _ = create_dataloaders(self.data_root, stage_cfg, pod_basis=self.pod_basis)
+        self.logger.info(f"Train samples: {len(train_loader.dataset)}, Val samples: {len(val_loader.dataset)}")
+
+        optimizer = AdamW(self.model.parameters(), lr=lr, weight_decay=self.config.get("weight_decay", 1e-4))
+        scheduler = CosineAnnealingLR(optimizer, T_max=max(1, epochs), eta_min=lr * 0.05)
+
+        best_val_rel_l2 = float("inf")
+        best_epoch = 0
+        patience = self.config.get("patience", 10)
+        patience_counter = 0
+
+        for epoch in range(1, epochs + 1):
+            t0 = time.time()
+            train_metrics = self.train_epoch(train_loader, optimizer, is_real_finetuning=(train_dataset_type == "real"))
+            scheduler.step()
+
+            val_metrics = self.evaluate(val_loader)
+            elapsed = time.time() - t0
+
+            val_rel_l2 = val_metrics["rel_l2"]
+            self.logger.info(
+                f"[{stage_name}][Epoch {epoch:03d}/{epochs:03d}][{elapsed:.1f}s] "
+                f"Train Loss: {train_metrics['train_loss']:.5f} | "
+                f"Val Rel-L2: {val_rel_l2 * 100:.2f}% | "
+                f"Val RMSE: {val_metrics['rmse']:.5f} | "
+                f"Vorticity Rel-L2: {val_metrics['vorticity_rel_l2'] * 100:.2f}%"
+            )
+
+            if val_rel_l2 < best_val_rel_l2:
+                best_val_rel_l2 = val_rel_l2
+                best_epoch = epoch
+                patience_counter = 0
+                torch.save(self.model.state_dict(), self.output_dir / f"{save_name}.pt")
+                torch.save(self.model.state_dict(), self.best_checkpoint_dir / f"{save_name}.pt")
+            else:
+                patience_counter += 1
+                if patience_counter >= patience:
+                    self.logger.info(f"Early stopping triggered at epoch {epoch} (best epoch: {best_epoch}).")
+                    break
+
+        self.logger.info(f"Finished {stage_name}. Best Val Rel-L2: {best_val_rel_l2 * 100:.2f}% at epoch {best_epoch}")
+        return best_val_rel_l2
+
+    def run(self):
+        # Stage 1: Sim Pre-training
+        sim_epochs = self.config.get("sim_epochs", 100)
+        sim_lr = self.config.get("sim_lr", 2e-4)
+        if sim_epochs > 0:
+            self.fit_stage("Stage 1 (Sim Pre-training)", "numerical", None, sim_epochs, sim_lr, "best_sim")
+
+        # Load best sim checkpoint before finetuning
+        sim_ckpt = self.output_dir / "best_sim.pt"
+        if sim_ckpt.exists():
+            self.model.load_state_dict(torch.load(sim_ckpt, map_location=self.device))
+            self.logger.info(f"Loaded best Sim weights from {sim_ckpt} for Real finetuning.")
+
+        # Stage 2: Few-shot Real Finetuning
+        real_epochs = self.config.get("real_epochs", 50)
+        real_lr = self.config.get("real_lr", 1e-4)
+        few_shot_k = self.config.get("few_shot_k", 3)
+        if real_epochs > 0:
+            self.fit_stage("Stage 2 (Real Fine-tuning)", "real", few_shot_k, real_epochs, real_lr, "best")
+
+        # Archive complete assets to best_checkpoints
+        with open(self.best_checkpoint_dir / "config.yaml", "w", encoding="utf-8") as f:
+            yaml.dump(self.config, f, allow_unicode=True)
+
+        shutil.copy(self.output_dir / "train.log", self.best_checkpoint_dir / "train.log")
+        self.logger.info(f"Run completed successfully! Archived artifacts to {self.best_checkpoint_dir}")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=Path, default=None, help="Path to single config yaml")
+    parser.add_argument("--config-dir", type=Path, default=None, help="Directory containing config yamls to run sequentially")
+    parser.add_argument("--gpu", type=int, default=0, help="CUDA device index")
+    args = parser.parse_args()
+
+    device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() and args.gpu >= 0 else "cpu")
+
+    config_files = []
+    if args.config:
+        config_files.append(args.config)
+    elif args.config_dir and args.config_dir.exists():
+        config_files.extend(sorted(args.config_dir.glob("*.yaml")))
+
+    if not config_files:
+        print("Error: No valid config files provided via --config or --config-dir.")
+        sys.exit(1)
+
+    for cfg_path in config_files:
+        print(f"\n{'='*80}\nExecuting Config: {cfg_path}\n{'='*80}")
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+        trainer = Sim2RealTrainer(cfg, device=device)
+        trainer.run()
+
+
+if __name__ == "__main__":
+    main()

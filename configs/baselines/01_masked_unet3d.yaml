@@ -1,0 +1,34 @@
+# Masked-UNet3D Official Baseline Configuration
+exp_name: "01_masked_unet3d"
+model_name: "masked_unet3d"
+
+# Data & Spatial Resolution
+data_root: "data/foil"
+grid_h: 64
+grid_w: 128
+in_step: 20
+out_step: 20
+interval: 5
+
+# Sensor Topology & Sparsity
+num_sensors: 64
+sensor_topology: "wall"  # wall | uniform | wake_rake | random
+
+# Model Architecture (23.0M Parameters aligned with RealPDEBench)
+unet_dim: 64
+dim_mults: [1, 2, 4]
+
+# Training Protocol
+batch_size: 8
+weight_decay: 0.0001
+clip_grad_norm: 1.0
+patience: 10
+
+# Stage 1: Sim Pre-training
+sim_epochs: 100
+sim_lr: 0.0002
+
+# Stage 2: Few-shot Real Fine-tuning
+real_epochs: 50
+real_lr: 0.0001
+few_shot_k: 3  # Only 3 real trajectories used for fine-tuning

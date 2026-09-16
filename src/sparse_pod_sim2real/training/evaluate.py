@@ -59,16 +59,30 @@ def evaluate_checkpoint(checkpoint_dir: Path, data_root: Path, device: torch.dev
     with open(cfg_file, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
-    # Load POD basis if needed
+    # Load POD basis if needed by model or Q-DEIM
     pod_path = config.get("pod_basis_path", None)
     pod_basis = None
     if pod_path and Path(pod_path).exists():
-        basis = torch.load(pod_path, map_location=device)
-        pod_basis = basis["basis"].float() if isinstance(basis, dict) and "basis" in basis else basis.float()
+        pod_basis = torch.load(pod_path, map_location=device)
     else:
-        m = 64 * 128 * 2
-        k = config.get("pod_rank", 64)
-        pod_basis, _ = torch.linalg.qr(torch.randn(m, k, device=device))
+        # Search candidate locations
+        candidates = [
+            data_root / "pod_basis_64x128.pt",
+            data_root / "pod_basis.pt",
+            checkpoint_dir / "pod_basis.pt",
+            Path("data/foil/pod_basis_64x128.pt"),
+        ]
+        for cand in candidates:
+            if cand.exists():
+                pod_basis = torch.load(cand, map_location=device)
+                break
+
+    model_name = config.get("model_name", "")
+    if pod_basis is None and ("pod" in model_name or config.get("sensor_topology") == "q_deim"):
+        raise FileNotFoundError(
+            f"Missing POD basis for evaluation of {model_name} in {checkpoint_dir}. "
+            f"Please ensure scripts/compute_sim_pod_basis.py has been run."
+        )
 
     # Test dataset
     test_ds = SparseTrajectoryDataset(
@@ -81,13 +95,14 @@ def evaluate_checkpoint(checkpoint_dir: Path, data_root: Path, device: torch.dev
         in_step=config.get("in_step", 20),
         out_step=config.get("out_step", 20),
         interval=config.get("interval", 10),
-        pod_basis=pod_basis,
+        pod_basis=pod_basis["basis"] if isinstance(pod_basis, dict) else pod_basis,
     )
 
     sensor_indices = test_ds.sensor_op.indices_1d.to(device)
     model = load_model(config, pod_basis=pod_basis, sensor_indices=sensor_indices).to(device)
-    model.load_state_dict(torch.load(weights_file, map_location=device), strict=False)
+    model.load_state_dict(torch.load(weights_file, map_location=device), strict=True)
     model.eval()
+
 
     test_loader = torch.utils.data.DataLoader(test_ds, batch_size=config.get("batch_size", 8), shuffle=False)
 

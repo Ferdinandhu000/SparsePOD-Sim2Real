@@ -80,9 +80,12 @@ class Sim2RealTrainer:
         self.loss_fn = CompositePhysicalLoss(
             v_weight=config.get("v_weight", 2.0),
             vorticity_weight=config.get("vorticity_weight", 0.1),
+            sensor_weight=config.get("sensor_weight", 1.0),
+            ortho_weight=config.get("ortho_weight", 0.01),
+            supervision_mode=config.get("supervision_mode", "sparse_sensors"),
         )
 
-    def _load_pod_basis(self) -> Optional[torch.Tensor]:
+    def _load_pod_basis(self) -> Optional[torch.Tensor | dict]:
         pod_path = self.config.get("pod_basis_path", None)
         if pod_path is None:
             # Check default locations
@@ -99,11 +102,15 @@ class Sim2RealTrainer:
         if pod_path and Path(pod_path).exists():
             self.logger.info(f"Loading POD basis from {pod_path}")
             basis = torch.load(pod_path, map_location=self.device)
-            if isinstance(basis, dict) and "basis" in basis:
-                basis = basis["basis"]
+            # If dictionary payload, move contained tensors to device and return dict
+            if isinstance(basis, dict):
+                for k in ["basis", "basis_perp", "mean", "singular_values"]:
+                    if k in basis and isinstance(basis[k], torch.Tensor):
+                        basis[k] = basis[k].to(self.device).float()
+                return basis
             return basis.float()
 
-        # Generate dummy orthogonal basis if not yet computed (for smoke test/init)
+        # Fallback orthonormal basis if not yet computed (for smoke test/dry-run)
         self.logger.warning("POD basis not found on disk. Generating random orthonormal basis.")
         m = 64 * 128 * 2
         k = self.config.get("pod_rank", 64)
@@ -123,10 +130,16 @@ class Sim2RealTrainer:
 
             optimizer.zero_grad()
             pred = self.model(batch)  # [B, Tout, H, W, 2]
-            target = batch["y_full"]  # [B, Tout, H, W, 2]
+            target_full = batch.get("y_full", None)
+            target_sensors = batch.get("y_sensor_values", None)
 
             loss, loss_dict = self.loss_fn(
-                pred, target, sensor_indices=self.sensor_indices, model=self.model, is_real_finetuning=is_real_finetuning
+                pred,
+                target_full=target_full,
+                target_sensors=target_sensors,
+                sensor_indices=self.sensor_indices,
+                model=self.model,
+                is_real_finetuning=is_real_finetuning,
             )
             loss.backward()
 
@@ -139,6 +152,7 @@ class Sim2RealTrainer:
             n_batches += 1
 
         return {"train_loss": total_loss / max(1, n_batches)}
+
 
     @torch.no_grad()
     def evaluate(self, dataloader) -> Dict[str, float]:
@@ -175,6 +189,7 @@ class Sim2RealTrainer:
 
         stage_cfg = dict(self.config)
         stage_cfg["dataset_type"] = train_dataset_type
+        stage_cfg["val_dataset_type"] = train_dataset_type  # strictly isolates validation split by stage
         stage_cfg["few_shot_k"] = few_shot_k
 
         train_loader, val_loader, _ = create_dataloaders(self.data_root, stage_cfg, pod_basis=self.pod_basis)

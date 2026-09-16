@@ -53,10 +53,21 @@ def test_all():
     dummy_sparse_in = sensor_op.to_sparse_tensor(dummy_full_in, append_mask=True).to(device)  # [B, Tin, H, W, 3]
     dummy_sensors = sensor_op.extract_sensor_values(dummy_full_in).to(device)  # [B, Tin, Ps, 2]
 
+    # Create structured POD basis dictionary (Basis + Orthogonal Complement + Reynolds Mean)
+    pod_basis_dict = {
+        "basis": pod_basis,
+        "basis_perp": torch.randn(m, 16, device=device),
+        "mean": torch.randn(m, device=device) * 0.05,
+        "singular_values": torch.linspace(10, 1, k + 16, device=device),
+    }
+
+    dummy_y_sensors = dummy_sensors.clone()
+
     batch = {
         "x_sparse": dummy_sparse_in,
         "x_full": dummy_full_in,
         "y_full": dummy_full_out,
+        "y_sensor_values": dummy_y_sensors,
         "sensor_values": dummy_sensors,
         "sensor_coords": sensor_op.coords.to(device),
         "sensor_mask": sensor_op.mask.to(device),
@@ -93,10 +104,10 @@ def test_all():
     del gappy_base, pred_gappy
     torch.cuda.empty_cache()
 
-    # 5. Test Flagship SOTA: PODResUNet3DSparse
+    # 5. Test Flagship SOTA: PODResUNet3DSparse (Grassmann Subspace Alignment + 20-frame UNet)
     print("\n[5/6] Testing Proposed POD-ResUNet3DSparse SOTA Model...")
     pod_unet = PODResUNet3DSparse(
-        pod_basis=pod_basis,
+        pod_basis=pod_basis_dict,
         sensor_indices=sensor_indices,
         h=h,
         w=w,
@@ -108,13 +119,26 @@ def test_all():
         use_warping=True,
     ).to(device)
 
-    pred_res = pod_unet(batch)
+    res_dict = pod_unet(batch, return_components=True)
+    pred_res = res_dict["u_final"]
     assert pred_res.shape == (b, tout, h, w, 2), f"POD-ResUNet output shape mismatch: {pred_res.shape}"
-    comp_loss_fn = CompositePhysicalLoss()
-    loss_res, l_dict = comp_loss_fn(pred_res, dummy_full_out, sensor_indices=sensor_indices, model=pod_unet)
+    
+    # Verify Principal Angles computation
+    angles = res_dict["principal_angles"]
+    print(f"  [OK] Initial principal angles: max={angles.max().item():.3f} deg, mean={angles.mean().item():.3f} deg")
+
+    # Test Stage 2 Sparse Sensor Supervision (Strictly no full-field backprop)
+    sparse_loss_fn = CompositePhysicalLoss(supervision_mode="sparse_sensors")
+    loss_res, l_dict = sparse_loss_fn(
+        pred_res,
+        target_sensors=dummy_y_sensors,
+        sensor_indices=sensor_indices,
+        model=pod_unet,
+        is_real_finetuning=True,
+    )
     loss_res.backward()
-    print(f"  [OK] POD-ResUNet3DSparse forward/backward passed. Output shape: {pred_res.shape}, Loss: {loss_res.item():.4f}")
-    del pod_unet, comp_loss_fn
+    print(f"  [OK] POD-ResUNet3DSparse forward/backward passed under sparse_sensors supervision. Loss: {loss_res.item():.4f}")
+    del pod_unet, sparse_loss_fn
     torch.cuda.empty_cache()
 
     # 6. Test MISFNO Model
@@ -131,6 +155,7 @@ def test_all():
     print("\nMetrics sample:")
     for k_m, v_m in metrics.items():
         print(f"  - {k_m}: {v_m:.5f}")
+
 
     print("\n" + "=" * 80)
     print("ALL SMOKE TESTS PASSED CLEANLY! SYSTEM IS 100% OPERATIONAL.")

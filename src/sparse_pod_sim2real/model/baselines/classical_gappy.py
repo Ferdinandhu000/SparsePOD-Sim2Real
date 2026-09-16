@@ -16,6 +16,7 @@ class ClassicalGappyPOD(nn.Module):
         self,
         pod_basis: torch.Tensor,
         sensor_indices: torch.Tensor,
+        mean_flow: torch.Tensor | None = None,
         reg_lambda: float = 1e-4,
         h: int = 64,
         w: int = 128,
@@ -42,6 +43,11 @@ class ClassicalGappyPOD(nn.Module):
         all_sensor_idx = torch.cat([u_idx, v_idx], dim=0)  # (2*Ps,)
         self.register_buffer("all_sensor_idx", all_sensor_idx)
 
+        if mean_flow is None:
+            mean_flow = torch.zeros(2 * h * w, dtype=pod_basis.dtype, device=pod_basis.device)
+        self.register_buffer("mean_flow", mean_flow.float().reshape(-1))
+        self.register_buffer("mean_sensor", self.mean_flow[all_sensor_idx])
+
         phi_p = pod_basis[all_sensor_idx, :]  # (2*Ps, K)
         self.register_buffer("phi_p", phi_p)
 
@@ -63,10 +69,11 @@ class ClassicalGappyPOD(nn.Module):
 
         # Solve modal coefficients a: [B, T, K]
         # proj_op: [K, 2*Ps]
-        a = torch.einsum("btp,kp->btk", y_vec, self.proj_op)
+        a = torch.einsum("btp,kp->btk", y_vec - self.mean_sensor.to(y_vec.device), self.proj_op)
 
         # Reconstruct full field: [B, T, 2*M]
-        u_full_flat = torch.einsum("btk,mk->btm", a, self.pod_basis)  # [B, T, 2*M]
+        u_full_flat = torch.einsum("btk,mk->btm", a, self.pod_basis)
+        u_full_flat = u_full_flat + self.mean_flow.to(u_full_flat.device)
         m = self.h * self.w
         u = u_full_flat[..., :m].reshape(b, t, self.h, self.w)
         v = u_full_flat[..., m:].reshape(b, t, self.h, self.w)

@@ -13,6 +13,7 @@ interval: 5
 # Sensor Topology & Sparsity
 num_sensors: 64
 sensor_topology: "wall"
+sparse_fill_method: "voronoi"  # zero or voronoi; input imputation for masked baselines
 
 # Model Architecture
 modes1: 8

@@ -34,6 +34,8 @@ class PhysicsCrossAttention(nn.Module):
 
         self.attn = nn.MultiheadAttention(embed_dim=d_model, num_heads=n_heads, batch_first=True)
         self.proj_out = nn.Linear(d_model, 1)
+        nn.init.zeros_(self.proj_out.weight)
+        nn.init.zeros_(self.proj_out.bias)
 
     def forward(self, sensor_values: torch.Tensor, sensor_coords: torch.Tensor) -> torch.Tensor:
         b, t, ps, _ = sensor_values.shape
@@ -148,8 +150,12 @@ class MISFNO(nn.Module):
             else None
         )
 
-    def forward(self, batch: dict | torch.Tensor) -> torch.Tensor:
+    def forward(self, batch: dict | torch.Tensor, mode: str = "sparse") -> torch.Tensor:
         if isinstance(batch, dict):
+            if mode == "full" and "x_full" in batch:
+                z_in, _ = self.gappy.project_full_field(batch["x_full"])
+                z_out = self.ldno(z_in)
+                return self.gappy.decode_field(z_out)
             sensor_values = batch["sensor_values"]
             sensor_coords = batch["sensor_coords"]
         else:

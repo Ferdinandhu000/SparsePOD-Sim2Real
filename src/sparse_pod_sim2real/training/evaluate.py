@@ -42,7 +42,9 @@ def autoregressive_rollout(
         next_sensors = dataset.sensor_op.extract_sensor_values(pred)
         curr_batch["sensor_values"] = next_sensors
         if "x_sparse" in curr_batch:
-            curr_batch["x_sparse"] = dataset.sensor_op.to_sparse_tensor(pred, append_mask=True)
+            curr_batch["x_sparse"] = dataset.sensor_op.to_sparse_tensor(
+                pred, append_mask=True, fill_method=dataset.sparse_fill_method
+            )
 
     return results
 
@@ -89,13 +91,14 @@ def evaluate_checkpoint(checkpoint_dir: Path, data_root: Path, device: torch.dev
         data_root=data_root,
         dataset_type="real",
         mode="test",
-        test_mode="all",
+        test_mode=config.get("test_mode", "all"),
         topology_type=config.get("sensor_topology", "wall"),
         num_sensors=config.get("num_sensors", 64),
         in_step=config.get("in_step", 20),
         out_step=config.get("out_step", 20),
         interval=config.get("interval", 10),
         pod_basis=pod_basis["basis"] if isinstance(pod_basis, dict) else pod_basis,
+        sparse_fill_method=config.get("sparse_fill_method", "zero"),
     )
 
     sensor_indices = test_ds.sensor_op.indices_1d.to(device)

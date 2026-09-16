@@ -9,15 +9,22 @@
 
 CONFIG_DIR="${1:-configs/our_models}"
 GPU="${2:-0}"
+DATA_ROOT="${3:-}"
 
 echo "=============================================================================="
 echo "SparsePOD-Sim2Real: Starting Batch Training"
 echo "Config Directory: ${CONFIG_DIR}"
 echo "GPU Device:       ${GPU}"
+if [ -n "${DATA_ROOT}" ]; then
+    echo "Data Root:        ${DATA_ROOT}"
+    DATA_ARG="--data-root ${DATA_ROOT}"
+else
+    DATA_ARG=""
+fi
 echo "=============================================================================="
 
 export PYTHONPATH="src:$PYTHONPATH"
-python -m sparse_pod_sim2real.training.trainer --config-dir "${CONFIG_DIR}" --gpu "${GPU}"
+python -m sparse_pod_sim2real.training.trainer --config-dir "${CONFIG_DIR}" --gpu "${GPU}" ${DATA_ARG}
 
 echo "=============================================================================="
 echo "Batch training completed! Models and logs archived in best_checkpoints/"

@@ -124,13 +124,26 @@ class PODResUNet3DSparse(nn.Module):
     def forward(self, batch: dict | torch.Tensor, mode: str = "sparse", return_components: bool = False):
         """
         mode:
-          - "full": Direct dense full-field forward (x_full -> UNet -> y_full) for Sim pre-training.
+          - "full": Exact dense POD projection for Sim pre-training. This bypasses
+            Gappy inversion while retaining modal dynamics, POD decoding, and residual refinement.
           - "sparse": Gappy-POD physical lifting from sparse sensors -> UNet residual refinement.
         """
         if isinstance(batch, dict):
-            # If explicit full-field mode (e.g. Stage 1 Sim pre-training with complete CFD data)
             if mode == "full" and "x_full" in batch:
-                return self.unet(batch["x_full"])
+                a_in, u_in_pod = self.gappy.project_full_field(batch["x_full"])
+                a_out = self.modal_prop(a_in)
+                u_out_pod = self.gappy.decode_field(a_out)
+                delta_u = self.unet(u_in_pod)
+                u_final = u_out_pod + self.residual_weight * delta_u
+                if return_components:
+                    return {
+                        "u_final": u_final,
+                        "u_pod": u_out_pod,
+                        "delta_u": delta_u,
+                        "a_in": a_in,
+                        "a_out": a_out,
+                    }
+                return u_final
             sensor_values = batch.get("sensor_values", None)
             if sensor_values is None and "x_full" in batch:
                 return self.unet(batch["x_full"])
@@ -169,4 +182,3 @@ class PODResUNet3DSparse(nn.Module):
                 "principal_angles": self.compute_principal_angles(),
             }
         return u_final
-

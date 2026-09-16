@@ -31,7 +31,7 @@ def load_model(
             in_time=in_time,
             out_time=out_time,
             channels=3,
-            out_channel=2,
+            out_channels=2,
             dim=dim,
             dim_mults=dim_mults,
         )
@@ -56,9 +56,12 @@ def load_model(
         if pod_basis is None or sensor_indices is None:
             raise ValueError("pod_basis and sensor_indices must be provided for ClassicalGappyPOD.")
         reg_lambda = config.get("reg_lambda", 1e-4)
+        basis_tensor = pod_basis["basis"] if isinstance(pod_basis, dict) else pod_basis
+        mean_tensor = pod_basis.get("mean") if isinstance(pod_basis, dict) else None
         return ClassicalGappyPOD(
-            pod_basis=pod_basis[:, :k],
+            pod_basis=basis_tensor[:, :k],
             sensor_indices=sensor_indices,
+            mean_flow=mean_tensor,
             reg_lambda=reg_lambda,
             h=h,
             w=w,

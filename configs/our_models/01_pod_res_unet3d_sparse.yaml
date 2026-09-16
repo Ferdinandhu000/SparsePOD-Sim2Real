@@ -19,6 +19,9 @@ pod_rank: 64
 reg_lambda: 0.0001
 use_warping: true        # Learnable Grassmannian alignment matrix W_align
 residual_weight: 1.0
+sim_pretrain_full: true
+real_finetune_scope: adaptation
+supervision_mode: sparse_sensors
 
 # 23M UNet3D Spatio-Temporal Residual Backbone
 unet_dim: 64

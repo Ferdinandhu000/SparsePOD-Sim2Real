@@ -87,6 +87,29 @@ class DifferentiableGappySolver(nn.Module):
         a = torch.linalg.solve(gram, rhs.unsqueeze(-1)).squeeze(-1)  # [B, T, K]
         return a
 
+    def project_full_field(
+        self,
+        full_field: torch.Tensor,
+        basis: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Project a dense field onto the POD basis without sensor subsampling."""
+        if full_field.ndim != 5 or full_field.shape[-1] != 2:
+            raise ValueError("full_field must have shape [B, T, H, W, 2].")
+        if full_field.shape[2:4] != (self.h, self.w):
+            raise ValueError(
+                f"Expected spatial shape {(self.h, self.w)}, got {tuple(full_field.shape[2:4])}."
+            )
+
+        b, t = full_field.shape[:2]
+        u = full_field[..., 0].reshape(b, t, -1)
+        v = full_field[..., 1].reshape(b, t, -1)
+        flat = torch.cat([u, v], dim=-1)
+        active_basis = self.pod_basis if basis is None else basis
+        fluctuation = flat - self.mean_flow.to(flat.device)
+        coefficients = torch.einsum("btm,mk->btk", fluctuation, active_basis)
+        reconstruction = self.decode_field(coefficients, adapted_basis=active_basis)
+        return coefficients, reconstruction
+
     def decode_field(
         self,
         a: torch.Tensor,
@@ -120,4 +143,3 @@ class DifferentiableGappySolver(nn.Module):
         a = self.solve_coefficients(sensor_values, adapted_basis=adapted_basis)
         field = self.decode_field(a, adapted_basis=adapted_basis)
         return a, field
-

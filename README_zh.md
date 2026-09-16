@@ -96,8 +96,8 @@ python -m sparse_pod_sim2real.training.trainer --config configs/our_models/01_po
 ```
 
 训练过程分为两阶段自动调度：
-* **Stage 1 (Sim Pre-training)**：在全量仿真数据上施加人工稀疏掩码联合预训练，产出 `best_sim.pt`；
-* **Stage 2 (Few-shot Real Fine-tuning)**：仅抽取 $n_{\text{real}} \in \{1, 3, 5\}$ 条真实轨迹微调旋转矩阵 $\mathbf{W}_{\text{align}}$ 与适配层，产出 `best.pt`。
+* **Stage 1 (Sim Pre-training)**：使用完整仿真流场进行精确 POD 投影，联合预训练模态动力学、POD 解码与残差细化网络，产出 `best_sim.pt`；
+* **Stage 2 (Few-shot Real Fine-tuning)**：仅使用 $n_{\text{real}} \in \{1, 3, 5\}$ 条真实轨迹的稀疏传感器监督；默认更新 Grassmann 对齐与模态动力学，并冻结大容量残差 backbone，产出 `best.pt`。
 * 最佳权重、配置文件与训练日志自动归档于 `best_checkpoints/<run_name>/`。
 
 ---

@@ -61,8 +61,16 @@ class Sim2RealTrainer:
         self.logger.info(f"Initialized Sim2RealTrainer on device: {self.device}")
         self.logger.info(f"Output directory: {self.output_dir}")
 
+        # Save config immediately to both output_dir and best_checkpoint_dir
+        with open(self.output_dir / "config.yaml", "w", encoding="utf-8") as f:
+            yaml.dump(self.config, f, allow_unicode=True)
+        with open(self.best_checkpoint_dir / "config.yaml", "w", encoding="utf-8") as f:
+            yaml.dump(self.config, f, allow_unicode=True)
+
         # Load or create POD basis
         self.pod_basis = self._load_pod_basis()
+        if self.pod_basis is not None:
+            torch.save(self.pod_basis, self.best_checkpoint_dir / "pod_basis.pt")
 
         # Build model and get sensor indices
         self.num_sensors = config.get("num_sensors", 64)
@@ -84,6 +92,11 @@ class Sim2RealTrainer:
             ortho_weight=config.get("ortho_weight", 0.01),
             supervision_mode=config.get("supervision_mode", "sparse_sensors"),
         )
+        self.use_amp = bool(config.get("use_amp", (self.device.type == "cuda")))
+        self.grad_accum_steps = int(config.get("gradient_accumulation_steps", 1))
+        self.scaler = torch.amp.GradScaler("cuda", enabled=(self.use_amp and self.device.type == "cuda"))
+        if self.use_amp:
+            self.logger.info("Automatic Mixed Precision (AMP FP16) enabled for high throughput and reduced memory.")
 
     def _load_pod_basis(self) -> Optional[torch.Tensor | dict]:
         pod_path = self.config.get("pod_basis_path", None)
@@ -92,7 +105,10 @@ class Sim2RealTrainer:
             candidates = [
                 self.data_root / "pod_basis_64x128.pt",
                 self.data_root / "pod_basis.pt",
+                Path("artifacts/pod_basis_64x128.pt"),
                 Path("data/pod_basis_64x128.pt"),
+                Path("data/foil/pod_basis_64x128.pt"),
+                Path("../POD-Sim2Real/data/pod_basis_64x128.pt"),
             ]
             for cand in candidates:
                 if cand.exists():
@@ -121,51 +137,65 @@ class Sim2RealTrainer:
         self.model.train()
         total_loss = 0.0
         n_batches = 0
+        optimizer.zero_grad()
 
-        for batch in dataloader:
+        sim_full = self.config.get("sim_pretrain_full", True)
+        clip_grad = self.config.get("clip_grad_norm", 1.0)
+        grad_accum = max(1, self.grad_accum_steps)
+
+        for step, batch in enumerate(dataloader):
             # Move tensors to device
             for k in batch:
                 if isinstance(batch[k], torch.Tensor):
                     batch[k] = batch[k].to(self.device)
 
-            optimizer.zero_grad()
-            
-            # Sim Pre-training uses 100% complete CFD flow fields (sim_pretrain_full=True)
-            sim_full = self.config.get("sim_pretrain_full", True)
-            if not is_real_finetuning and sim_full:
-                if hasattr(self.model, "forward") and "mode" in self.model.forward.__code__.co_varnames:
-                    pred = self.model(batch, mode="full")
-                elif "x_sparse" in batch and "x_full" in batch:
-                    # Masked baseline: in dense Sim pre-training, provide complete flow + active mask
-                    dense_with_mask = torch.cat([batch["x_full"], torch.ones_like(batch["x_sparse"][..., -1:])], dim=-1)
-                    b_full = dict(batch)
-                    b_full["x_sparse"] = dense_with_mask
-                    pred = self.model(b_full)
+            with torch.amp.autocast(device_type=self.device.type, dtype=torch.float16, enabled=(self.use_amp and self.device.type == "cuda")):
+                # Sim Pre-training uses 100% complete CFD flow fields (sim_pretrain_full=True)
+                if not is_real_finetuning and sim_full:
+                    if hasattr(self.model, "forward") and "mode" in self.model.forward.__code__.co_varnames:
+                        pred = self.model(batch, mode="full")
+                    elif "x_sparse" in batch and "x_full" in batch:
+                        # Masked baseline: in dense Sim pre-training, provide complete flow + active mask
+                        dense_with_mask = torch.cat([batch["x_full"], torch.ones_like(batch["x_sparse"][..., -1:])], dim=-1)
+                        b_full = dict(batch)
+                        b_full["x_sparse"] = dense_with_mask
+                        pred = self.model(b_full)
+                    else:
+                        pred = self.model(batch)
                 else:
+                    # Real Fine-tuning: strictly operates on sparse sensor inputs
                     pred = self.model(batch)
+
+                target_full = batch.get("y_full", None)
+                target_sensors = batch.get("y_sensor_values", None)
+
+                loss, loss_dict = self.loss_fn(
+                    pred,
+                    target_full=target_full,
+                    target_sensors=target_sensors,
+                    sensor_indices=self.sensor_indices,
+                    model=self.model,
+                    is_real_finetuning=is_real_finetuning,
+                )
+                loss_scaled = loss / grad_accum
+
+            if self.scaler.is_enabled():
+                self.scaler.scale(loss_scaled).backward()
+                if (step + 1) % grad_accum == 0 or (step + 1) == len(dataloader):
+                    if clip_grad > 0:
+                        self.scaler.unscale_(optimizer)
+                        nn.utils.clip_grad_norm_([p for p in self.model.parameters() if p.grad is not None], clip_grad)
+                    self.scaler.step(optimizer)
+                    self.scaler.update()
+                    optimizer.zero_grad()
             else:
-                # Real Fine-tuning: strictly operates on sparse sensor inputs
-                pred = self.model(batch)
+                loss_scaled.backward()
+                if (step + 1) % grad_accum == 0 or (step + 1) == len(dataloader):
+                    if clip_grad > 0:
+                        nn.utils.clip_grad_norm_([p for p in self.model.parameters() if p.grad is not None], clip_grad)
+                    optimizer.step()
+                    optimizer.zero_grad()
 
-            target_full = batch.get("y_full", None)
-            target_sensors = batch.get("y_sensor_values", None)
-
-            loss, loss_dict = self.loss_fn(
-                pred,
-                target_full=target_full,
-                target_sensors=target_sensors,
-                sensor_indices=self.sensor_indices,
-                model=self.model,
-                is_real_finetuning=is_real_finetuning,
-            )
-
-            loss.backward()
-
-            clip_grad = self.config.get("clip_grad_norm", 1.0)
-            if clip_grad > 0:
-                nn.utils.clip_grad_norm_(self.model.parameters(), clip_grad)
-
-            optimizer.step()
             total_loss += loss.item()
             n_batches += 1
 
@@ -173,21 +203,37 @@ class Sim2RealTrainer:
 
 
     @torch.no_grad()
-    def evaluate(self, dataloader) -> Dict[str, float]:
+    def evaluate(self, dataloader, is_real_finetuning: bool = False) -> Dict[str, float]:
         self.model.eval()
         preds = []
         targets = []
+
+        sim_full = self.config.get("sim_pretrain_full", True)
+        eval_full = (not is_real_finetuning) and sim_full
 
         for batch in dataloader:
             for k in batch:
                 if isinstance(batch[k], torch.Tensor):
                     batch[k] = batch[k].to(self.device)
 
-            if hasattr(self.model, "forward") and "mode" in self.model.forward.__code__.co_varnames:
-                pred = self.model(batch, mode="sparse")
-            else:
-                pred = self.model(batch)
-            preds.append(pred.cpu())
+            with torch.amp.autocast(device_type=self.device.type, dtype=torch.float16, enabled=(self.use_amp and self.device.type == "cuda")):
+                if eval_full:
+                    if hasattr(self.model, "forward") and "mode" in self.model.forward.__code__.co_varnames:
+                        pred = self.model(batch, mode="full")
+                    elif "x_sparse" in batch and "x_full" in batch:
+                        dense_with_mask = torch.cat([batch["x_full"], torch.ones_like(batch["x_sparse"][..., -1:])], dim=-1)
+                        b_full = dict(batch)
+                        b_full["x_sparse"] = dense_with_mask
+                        pred = self.model(b_full)
+                    else:
+                        pred = self.model(batch)
+                else:
+                    if hasattr(self.model, "forward") and "mode" in self.model.forward.__code__.co_varnames:
+                        pred = self.model(batch, mode="sparse")
+                    else:
+                        pred = self.model(batch)
+
+            preds.append(pred.float().cpu())
             targets.append(batch["y_full"].cpu())
 
         if not preds:
@@ -216,7 +262,16 @@ class Sim2RealTrainer:
         train_loader, val_loader, _ = create_dataloaders(self.data_root, stage_cfg, pod_basis=self.pod_basis)
         self.logger.info(f"Train samples: {len(train_loader.dataset)}, Val samples: {len(val_loader.dataset)}")
 
-        optimizer = AdamW(self.model.parameters(), lr=lr, weight_decay=self.config.get("weight_decay", 1e-4))
+        if train_dataset_type == "real":
+            self._configure_real_finetuning()
+        else:
+            for parameter in self.model.parameters():
+                parameter.requires_grad_(True)
+
+        trainable_parameters = [p for p in self.model.parameters() if p.requires_grad]
+        if not trainable_parameters:
+            raise RuntimeError("Real fine-tuning selected no trainable parameters.")
+        optimizer = AdamW(trainable_parameters, lr=lr, weight_decay=self.config.get("weight_decay", 1e-4))
         scheduler = CosineAnnealingLR(optimizer, T_max=max(1, epochs), eta_min=lr * 0.05)
 
         best_val_rel_l2 = float("inf")
@@ -226,10 +281,11 @@ class Sim2RealTrainer:
 
         for epoch in range(1, epochs + 1):
             t0 = time.time()
-            train_metrics = self.train_epoch(train_loader, optimizer, is_real_finetuning=(train_dataset_type == "real"))
+            is_real = (train_dataset_type == "real")
+            train_metrics = self.train_epoch(train_loader, optimizer, is_real_finetuning=is_real)
             scheduler.step()
 
-            val_metrics = self.evaluate(val_loader)
+            val_metrics = self.evaluate(val_loader, is_real_finetuning=is_real)
             elapsed = time.time() - t0
 
             val_rel_l2 = val_metrics["rel_l2"]
@@ -255,6 +311,43 @@ class Sim2RealTrainer:
 
         self.logger.info(f"Finished {stage_name}. Best Val Rel-L2: {best_val_rel_l2 * 100:.2f}% at epoch {best_epoch}")
         return best_val_rel_l2
+
+    def _configure_real_finetuning(self) -> None:
+        """Select an explicit adaptation scope for few-shot Real training."""
+        scope = self.config.get("real_finetune_scope", "adaptation")
+        if scope == "full":
+            for parameter in self.model.parameters():
+                parameter.requires_grad_(True)
+            self.logger.info("Real fine-tuning scope: full model")
+            return
+
+        for parameter in self.model.parameters():
+            parameter.requires_grad_(False)
+
+        trainable_modules = []
+        if hasattr(self.model, "warping") and self.model.warping is not None:
+            for parameter in self.model.warping.parameters():
+                parameter.requires_grad_(True)
+            trainable_modules.append("warping")
+        if scope in ("adaptation_dynamics", "adaptation") and hasattr(self.model, "modal_prop"):
+            for parameter in self.model.modal_prop.parameters():
+                parameter.requires_grad_(True)
+            trainable_modules.append("modal_prop")
+        if scope in ("adaptation_dynamics", "adaptation") and hasattr(self.model, "phca"):
+            for parameter in self.model.phca.parameters():
+                parameter.requires_grad_(True)
+            trainable_modules.append("phca")
+        if scope in ("adaptation_dynamics", "adaptation") and hasattr(self.model, "ldno"):
+            for parameter in self.model.ldno.parameters():
+                parameter.requires_grad_(True)
+            trainable_modules.append("ldno")
+
+        if not trainable_modules:
+            # Baselines have no named adaptation modules; retain their full model.
+            for parameter in self.model.parameters():
+                parameter.requires_grad_(True)
+            trainable_modules.append("full_model_fallback")
+        self.logger.info(f"Real fine-tuning scope: {scope} ({', '.join(trainable_modules)})")
 
     def run(self):
         # Stage 1: Sim Pre-training
@@ -285,10 +378,18 @@ class Sim2RealTrainer:
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="SparsePOD-Sim2Real Model Trainer")
     parser.add_argument("--config", type=Path, default=None, help="Path to single config yaml")
     parser.add_argument("--config-dir", type=Path, default=None, help="Directory containing config yamls to run sequentially")
     parser.add_argument("--gpu", type=int, default=0, help="CUDA device index")
+    parser.add_argument("--data-root", type=Path, default=None, help="Override dataset root path")
+    parser.add_argument("--pod-basis", type=Path, default=None, help="Override path to pod_basis.pt")
+    parser.add_argument("--output-dir", type=Path, default=None, help="Override artifacts/runs output directory")
+    parser.add_argument("--checkpoints-dir", type=Path, default=None, help="Override best_checkpoints directory")
+    parser.add_argument("--sim-epochs", type=int, default=None, help="Override number of sim pre-training epochs")
+    parser.add_argument("--real-epochs", type=int, default=None, help="Override number of real fine-tuning epochs")
+    parser.add_argument("--batch-size", type=int, default=None, help="Override batch size")
+    parser.add_argument("--few-shot-k", type=int, default=None, help="Override few-shot k")
     args = parser.parse_args()
 
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() and args.gpu >= 0 else "cpu")
@@ -307,6 +408,28 @@ def main():
         print(f"\n{'='*80}\nExecuting Config: {cfg_path}\n{'='*80}")
         with open(cfg_path, "r", encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
+
+        # Apply CLI overrides if provided
+        if args.data_root is not None:
+            cfg["data_root"] = str(args.data_root)
+        elif "DATA_ROOT" in os.environ:
+            cfg["data_root"] = os.environ["DATA_ROOT"]
+
+        if args.pod_basis is not None:
+            cfg["pod_basis_path"] = str(args.pod_basis)
+        if args.output_dir is not None:
+            cfg["output_dir"] = str(args.output_dir)
+        if args.checkpoints_dir is not None:
+            cfg["best_checkpoints_dir"] = str(args.checkpoints_dir)
+        if args.sim_epochs is not None:
+            cfg["sim_epochs"] = args.sim_epochs
+        if args.real_epochs is not None:
+            cfg["real_epochs"] = args.real_epochs
+        if args.batch_size is not None:
+            cfg["batch_size"] = args.batch_size
+        if args.few_shot_k is not None:
+            cfg["few_shot_k"] = args.few_shot_k
+
         trainer = Sim2RealTrainer(cfg, device=device)
         trainer.run()
 

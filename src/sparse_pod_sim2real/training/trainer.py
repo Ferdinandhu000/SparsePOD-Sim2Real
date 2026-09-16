@@ -129,7 +129,24 @@ class Sim2RealTrainer:
                     batch[k] = batch[k].to(self.device)
 
             optimizer.zero_grad()
-            pred = self.model(batch)  # [B, Tout, H, W, 2]
+            
+            # Sim Pre-training uses 100% complete CFD flow fields (sim_pretrain_full=True)
+            sim_full = self.config.get("sim_pretrain_full", True)
+            if not is_real_finetuning and sim_full:
+                if hasattr(self.model, "forward") and "mode" in self.model.forward.__code__.co_varnames:
+                    pred = self.model(batch, mode="full")
+                elif "x_sparse" in batch and "x_full" in batch:
+                    # Masked baseline: in dense Sim pre-training, provide complete flow + active mask
+                    dense_with_mask = torch.cat([batch["x_full"], torch.ones_like(batch["x_sparse"][..., -1:])], dim=-1)
+                    b_full = dict(batch)
+                    b_full["x_sparse"] = dense_with_mask
+                    pred = self.model(b_full)
+                else:
+                    pred = self.model(batch)
+            else:
+                # Real Fine-tuning: strictly operates on sparse sensor inputs
+                pred = self.model(batch)
+
             target_full = batch.get("y_full", None)
             target_sensors = batch.get("y_sensor_values", None)
 
@@ -141,6 +158,7 @@ class Sim2RealTrainer:
                 model=self.model,
                 is_real_finetuning=is_real_finetuning,
             )
+
             loss.backward()
 
             clip_grad = self.config.get("clip_grad_norm", 1.0)
@@ -165,7 +183,10 @@ class Sim2RealTrainer:
                 if isinstance(batch[k], torch.Tensor):
                     batch[k] = batch[k].to(self.device)
 
-            pred = self.model(batch)
+            if hasattr(self.model, "forward") and "mode" in self.model.forward.__code__.co_varnames:
+                pred = self.model(batch, mode="sparse")
+            else:
+                pred = self.model(batch)
             preds.append(pred.cpu())
             targets.append(batch["y_full"].cpu())
 

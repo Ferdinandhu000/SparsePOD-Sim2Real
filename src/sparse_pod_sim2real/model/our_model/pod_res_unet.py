@@ -121,12 +121,19 @@ class PODResUNet3DSparse(nn.Module):
             return self.warping.compute_principal_angles(self.gappy.pod_basis)
         return torch.zeros(self.k)
 
-    def forward(self, batch: dict | torch.Tensor, return_components: bool = False):
+    def forward(self, batch: dict | torch.Tensor, mode: str = "sparse", return_components: bool = False):
         """
-        batch: dict with "sensor_values" [B, Tin, Ps, 2]
+        mode:
+          - "full": Direct dense full-field forward (x_full -> UNet -> y_full) for Sim pre-training.
+          - "sparse": Gappy-POD physical lifting from sparse sensors -> UNet residual refinement.
         """
         if isinstance(batch, dict):
-            sensor_values = batch["sensor_values"]
+            # If explicit full-field mode (e.g. Stage 1 Sim pre-training with complete CFD data)
+            if mode == "full" and "x_full" in batch:
+                return self.unet(batch["x_full"])
+            sensor_values = batch.get("sensor_values", None)
+            if sensor_values is None and "x_full" in batch:
+                return self.unet(batch["x_full"])
         else:
             sensor_values = batch
 
@@ -162,3 +169,4 @@ class PODResUNet3DSparse(nn.Module):
                 "principal_angles": self.compute_principal_angles(),
             }
         return u_final
+

@@ -119,7 +119,15 @@ def test_all():
         use_warping=True,
     ).to(device)
 
-    res_dict = pod_unet(batch, return_components=True)
+    # 5a. Test Dense Full-field Sim Pre-training mode (UNet receives 100% CFD field)
+    pred_full = pod_unet(batch, mode="full")
+    assert pred_full.shape == (b, tout, h, w, 2), f"Full-field output shape mismatch: {pred_full.shape}"
+    loss_sim = nn.MSELoss()(pred_full, dummy_full_out)
+    loss_sim.backward()
+    print(f"  [OK] Dense full-field Sim pre-training forward/backward passed. Output shape: {pred_full.shape}")
+
+    # 5b. Test Sparse-to-Full Real Adaptation mode (Gappy-POD lifting + UNet residual)
+    res_dict = pod_unet(batch, mode="sparse", return_components=True)
     pred_res = res_dict["u_final"]
     assert pred_res.shape == (b, tout, h, w, 2), f"POD-ResUNet output shape mismatch: {pred_res.shape}"
     

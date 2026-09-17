@@ -69,15 +69,16 @@ class ClassicalGappyPOD(nn.Module):
 
         # Solve modal coefficients a: [B, T, K]
         # proj_op: [K, 2*Ps]
-        a = torch.einsum("btp,kp->btk", y_vec - self.mean_sensor.to(y_vec.device), self.proj_op)
+        fluc = (y_vec - self.mean_sensor.to(y_vec.device, dtype=y_vec.dtype)).to(self.proj_op.dtype)
+        a = torch.einsum("btp,kp->btk", fluc, self.proj_op)
 
         # Reconstruct full field: [B, T, 2*M]
-        u_full_flat = torch.einsum("btk,mk->btm", a, self.pod_basis)
-        u_full_flat = u_full_flat + self.mean_flow.to(u_full_flat.device)
+        u_full_flat = torch.einsum("btk,mk->btm", a, self.pod_basis.to(a.dtype))
+        u_full_flat = u_full_flat + self.mean_flow.to(u_full_flat.device, dtype=u_full_flat.dtype)
         m = self.h * self.w
         u = u_full_flat[..., :m].reshape(b, t, self.h, self.w)
         v = u_full_flat[..., m:].reshape(b, t, self.h, self.w)
-        return torch.stack([u, v], dim=-1)  # [B, T, H, W, 2]
+        return torch.stack([u, v], dim=-1).to(sensor_values.dtype)  # [B, T, H, W, 2]
 
     def forward(self, batch: dict) -> torch.Tensor:
         sensor_values = batch["sensor_values"]  # [B, Tin, Ps, 2]

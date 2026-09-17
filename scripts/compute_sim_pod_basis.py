@@ -22,13 +22,25 @@ def main():
     parser.add_argument("--train-ratio", type=float, default=0.8, help="Fraction of simulation trajectories considered as train split")
     args = parser.parse_args()
 
-    if not args.tensor_dir.exists():
+    tensor_dir = args.tensor_dir
+    if not tensor_dir.exists():
+        candidates = [
+            Path("data/tensor_cache_64x128/numerical"),
+            Path("data/foil/tensor_cache_64x128/numerical"),
+            Path("../POD-Sim2Real/data/tensor_cache_64x128/numerical"),
+        ]
+        for c in candidates:
+            if c.exists() and list(c.glob("*.pt")):
+                tensor_dir = c
+                break
+
+    if not tensor_dir.exists():
         print(f"Error: Tensor directory {args.tensor_dir} not found.")
         return
 
-    all_files = sorted(list(args.tensor_dir.glob("*.pt")))
+    all_files = sorted(list(tensor_dir.glob("*.pt")))
     if not all_files:
-        print(f"No .pt files found in {args.tensor_dir}")
+        print(f"No .pt files found in {tensor_dir}")
         return
 
     # Strictly filter Sim Train trajectories only (prevent test leakage into basis)

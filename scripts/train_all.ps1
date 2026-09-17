@@ -1,5 +1,5 @@
 param (
-    [string]$ConfigDir = "configs/our_models",
+    [string]$ConfigDir = "configs/yaml_main_v1",
     [int]$Gpu = 0,
     [string]$DataRoot = ""
 )

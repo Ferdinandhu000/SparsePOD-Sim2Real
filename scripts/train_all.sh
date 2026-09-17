@@ -7,7 +7,7 @@
 #   bash scripts/train_all.sh --gpu 1            # Run on specific GPU
 # ==============================================================================
 
-CONFIG_DIR="${1:-configs/our_models}"
+CONFIG_DIR="${1:-configs/yaml_main_v1}"
 GPU="${2:-0}"
 DATA_ROOT="${3:-}"
 

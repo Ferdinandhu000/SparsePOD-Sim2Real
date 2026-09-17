@@ -79,13 +79,13 @@ class DifferentiableGappySolver(nn.Module):
         else:
             phi_p = self.phi_p
 
-        # Gram matrix: [K, K]
-        gram = phi_p.T @ phi_p + self.reg_lambda * self.prior_mat.to(phi_p.device)
-        # RHS: [B, T, K]
-        rhs = torch.einsum("btp,pk->btk", y_fluc, phi_p)
+        # Gram matrix: [K, K] in float32 for numerical stability in linalg.solve
+        gram = (phi_p.T @ phi_p + self.reg_lambda * self.prior_mat.to(phi_p.device)).float()
+        # RHS: [B, T, K] in float32
+        rhs = torch.einsum("btp,pk->btk", y_fluc.to(phi_p.dtype), phi_p).float()
         # Solve: gram * a = rhs
         a = torch.linalg.solve(gram, rhs.unsqueeze(-1)).squeeze(-1)  # [B, T, K]
-        return a
+        return a.to(sensor_values.dtype)
 
     def project_full_field(
         self,
@@ -105,8 +105,8 @@ class DifferentiableGappySolver(nn.Module):
         v = full_field[..., 1].reshape(b, t, -1)
         flat = torch.cat([u, v], dim=-1)
         active_basis = self.pod_basis if basis is None else basis
-        fluctuation = flat - self.mean_flow.to(flat.device)
-        coefficients = torch.einsum("btm,mk->btk", fluctuation, active_basis)
+        fluctuation = flat - self.mean_flow.to(flat.device, dtype=flat.dtype)
+        coefficients = torch.einsum("btm,mk->btk", fluctuation, active_basis.to(flat.dtype))
         reconstruction = self.decode_field(coefficients, adapted_basis=active_basis)
         return coefficients, reconstruction
 
@@ -123,9 +123,9 @@ class DifferentiableGappySolver(nn.Module):
         basis = adapted_basis if adapted_basis is not None else self.pod_basis
 
         # Fluctuating field: [B, T, 2*M]
-        flat_fluc = torch.einsum("btk,mk->btm", a, basis)
+        flat_fluc = torch.einsum("btk,mk->btm", a, basis.to(a.dtype))
         # Add base mean flow
-        flat_total = flat_fluc + self.mean_flow.to(flat_fluc.device)
+        flat_total = flat_fluc + self.mean_flow.to(flat_fluc.device, dtype=flat_fluc.dtype)
 
         m = self.h * self.w
         u = flat_total[..., :m].reshape(b, t, self.h, self.w)

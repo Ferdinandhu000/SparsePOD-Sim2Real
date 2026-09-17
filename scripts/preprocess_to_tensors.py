@@ -29,8 +29,12 @@ def main():
     sim_dir = args.sim_dir
     if real_dir is None or sim_dir is None:
         candidates = [
+            (args.data_root / "hf_dataset" / "real", args.data_root / "hf_dataset" / "sim"),
             (args.data_root / "hf_dataset" / "real", args.data_root / "hf_dataset" / "numerical"),
+            (args.data_root / "data_real", args.data_root / "data_sim"),
             (args.data_root / "real", args.data_root / "numerical"),
+            (Path("data/foil/hf_dataset/real"), Path("data/foil/hf_dataset/sim")),
+            (Path("data/data_real"), Path("data/data_sim")),
             (Path("data/foil/real"), Path("data/foil/numerical")),
         ]
         for r_cand, s_cand in candidates:

@@ -5,6 +5,7 @@ param (
 )
 
 $env:PYTHONPATH = "src;$env:PYTHONPATH"
+$ErrorActionPreference = "Stop"
 Write-Host "==============================================================================" -ForegroundColor Cyan
 Write-Host "SparsePOD-Sim2Real: Evaluating All Checkpoints in $CkptDir" -ForegroundColor Green
 Write-Host "==============================================================================" -ForegroundColor Cyan
@@ -13,3 +14,4 @@ python -m sparse_pod_sim2real.training.evaluate `
     --checkpoints-dir "$CkptDir" `
     --data-root "$DataRoot" `
     --gpu $Gpu
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

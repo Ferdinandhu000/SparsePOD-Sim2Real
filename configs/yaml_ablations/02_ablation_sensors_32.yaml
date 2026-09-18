@@ -2,6 +2,19 @@
 exp_name: "ablation_sensors_32"
 model_name: "pod_res_unet3d"
 data_root: "data/foil"
+manifest_dir: "manifests"
+allow_manifest_fallback: false
+model_init_seed: 42
+few_shot_traj_seed: 101
+sensor_placement_seed: 202
+num_workers: 4
+pin_memory: true
+trajectory_locality_batches: 8
+val_selection_strategy: "dense_val"
+log_every_n_steps: 50
+# Isotropic grid-cell units; see the primary config for rationale.
+grid_dx: 1.0
+grid_dy: 1.0
 grid_h: 64
 grid_w: 128
 in_step: 20
@@ -9,7 +22,7 @@ out_step: 20
 interval: 5
 
 num_sensors: 32
-sensor_topology: "wall"
+sensor_topology: "group_q_deim"
 
 pod_rank: 64
 reg_lambda: 0.0001

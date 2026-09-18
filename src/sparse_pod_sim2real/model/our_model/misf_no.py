@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import math
-from typing import Dict, Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -39,7 +37,15 @@ class PhysicsCrossAttention(nn.Module):
 
     def forward(self, sensor_values: torch.Tensor, sensor_coords: torch.Tensor) -> torch.Tensor:
         b, t, ps, _ = sensor_values.shape
-        coords_exp = sensor_coords.unsqueeze(0).unsqueeze(0).expand(b, t, ps, 2)
+        if sensor_coords.ndim == 2:  # [Ps, 2]
+            coords_exp = sensor_coords.unsqueeze(0).unsqueeze(0).expand(b, t, ps, -1)
+        elif sensor_coords.ndim == 3:  # [B, Ps, 2] (DataLoader batched)
+            coords_exp = sensor_coords.unsqueeze(1).expand(b, t, ps, -1)
+        elif sensor_coords.ndim == 4:  # [B, T, Ps, 2]
+            coords_exp = sensor_coords
+        else:
+            raise ValueError(f"Unsupported sensor_coords shape: {sensor_coords.shape}")
+
         sensor_tokens = torch.cat([sensor_values, coords_exp], dim=-1)  # [B, T, Ps, 4]
 
         tokens_flat = sensor_tokens.reshape(b * t, ps, 4)
@@ -75,10 +81,16 @@ class LatentDynamicsFNO1D(nn.Module):
         x_conv = self.conv1(x.permute(0, 2, 1)).permute(0, 2, 1)
         x = F.gelu(x + x_conv)
 
-        x_ft = torch.fft.rfft(x, dim=1)
-        x_ft[:, self.modes:, :] = 0.0
-        x_filtered = torch.fft.irfft(x_ft, n=self.in_time, dim=1)
-        x = x + x_filtered
+        # cuFFT does not support arbitrary non-power-of-two signal lengths in
+        # FP16 (Tin=20 is the production setting). Keep the spectral section
+        # in FP32 even when the surrounding model runs under AMP.
+        fft_device_type = x.device.type
+        with torch.amp.autocast(device_type=fft_device_type, enabled=False):
+            x_f32 = x.float()
+            x_ft = torch.fft.rfft(x_f32, dim=1)
+            x_ft[:, self.modes:, :] = 0.0
+            x_filtered = torch.fft.irfft(x_ft, n=self.in_time, dim=1)
+        x = x + x_filtered.to(dtype=x.dtype)
 
         x = F.gelu(self.fc1(x))
         z_step = self.fc2(x)  # [B, Tin, K]

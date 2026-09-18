@@ -10,7 +10,7 @@ src_dir = project_root / 'src'
 if str(src_dir) not in sys.path:
     sys.path.insert(0, str(src_dir))
 
-from sparse_pod_sim2real.training.evaluate import main
+from sparse_pod_sim2real.training.evaluate import main  # noqa: E402
 
 if __name__ == '__main__':
     main()

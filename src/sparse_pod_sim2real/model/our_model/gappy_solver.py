@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Optional, Tuple
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 
 class DifferentiableGappySolver(nn.Module):
@@ -79,12 +78,20 @@ class DifferentiableGappySolver(nn.Module):
         else:
             phi_p = self.phi_p
 
-        # Gram matrix: [K, K] in float32 for numerical stability in linalg.solve
-        gram = (phi_p.T @ phi_p + self.reg_lambda * self.prior_mat.to(phi_p.device)).float()
-        # RHS: [B, T, K] in float32
-        rhs = torch.einsum("btp,pk->btk", y_fluc.to(phi_p.dtype), phi_p).float()
-        # Solve: gram * a = rhs
-        a = torch.linalg.solve(gram, rhs.unsqueeze(-1)).squeeze(-1)  # [B, T, K]
+        # Execute linear solve strictly in full float32 with AMP autocast disabled to prevent low-precision Gram degeneration
+        device_type = y_vec.device.type
+        with torch.amp.autocast(device_type=device_type, enabled=False):
+            phi_p_f32 = phi_p.float()
+            y_fluc_f32 = y_fluc.float()
+            prior_f32 = self.prior_mat.to(phi_p.device).float()
+
+            # Gram matrix: [K, K] in float32
+            gram = phi_p_f32.T @ phi_p_f32 + self.reg_lambda * prior_f32
+            # RHS: [B, T, K] in float32
+            rhs = torch.einsum("btp,pk->btk", y_fluc_f32, phi_p_f32)
+            # Solve: gram * a = rhs
+            a = torch.linalg.solve(gram, rhs.unsqueeze(-1)).squeeze(-1)  # [B, T, K]
+
         return a.to(sensor_values.dtype)
 
     def project_full_field(

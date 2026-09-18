@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, Optional, Tuple, Union
+from typing import Optional, Union
 import torch
 import torch.nn as nn
 
@@ -36,7 +36,7 @@ class ModalLinearPropagator(nn.Module):
 
 class PODResUNet3DSparse(nn.Module):
     """
-    FLAGSHIP SOTA MODEL: Physics-Lifting Grassmannian Residual Operator.
+    Physics-Lifting Grassmannian Residual Operator.
     
     1. Differentiable Gappy-POD lifts sparse sensor measurements to a globally coherent coarse flow field
        using Reynolds-decomposed mean flow + POD fluctuating modes.
@@ -79,6 +79,9 @@ class PODResUNet3DSparse(nn.Module):
             basis_tensor = pod_basis[:, :k]
             mean_tensor = None
             perp_tensor = None
+
+        k = basis_tensor.shape[1]
+        self.k = k
 
         # 1. Gappy-POD physical lifting module (with Reynolds decomposition)
         self.gappy = DifferentiableGappySolver(

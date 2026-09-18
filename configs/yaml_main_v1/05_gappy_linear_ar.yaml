@@ -1,6 +1,7 @@
-# Sensor Count Ablation: 16 Sensors
-exp_name: "ablation_sensors_16"
-model_name: "pod_res_unet3d"
+# Trainable Gappy-POD + linear modal autoregressive baseline
+exp_name: "05_gappy_linear_ar"
+model_name: "gappy_linear_ar"
+
 data_root: "data/foil"
 manifest_dir: "manifests"
 allow_manifest_fallback: false
@@ -12,7 +13,6 @@ pin_memory: true
 trajectory_locality_batches: 8
 val_selection_strategy: "dense_val"
 log_every_n_steps: 50
-# Isotropic grid-cell units; see the primary config for rationale.
 grid_dx: 1.0
 grid_dy: 1.0
 grid_h: 64
@@ -21,18 +21,21 @@ in_step: 20
 out_step: 20
 interval: 5
 
-num_sensors: 16
+num_sensors: 64
 sensor_topology: "group_q_deim"
-
 pod_rank: 64
 reg_lambda: 0.0001
-use_warping: true
-residual_weight: 1.0
+sim_pretrain_full: true
+real_finetune_scope: adaptation_dynamics
+supervision_mode: sparse_sensors
 
-unet_dim: 64
-dim_mults: [1, 2, 4]
-batch_size: 8
+batch_size: 32
+weight_decay: 0.0001
+clip_grad_norm: 1.0
 patience: 10
+v_weight: 2.0
+vorticity_weight: 0.1
+ortho_weight: 0.0
 
 sim_epochs: 100
 sim_lr: 0.0002

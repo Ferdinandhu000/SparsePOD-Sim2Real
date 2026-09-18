@@ -37,9 +37,11 @@ ENV/
 .idea/
 
 # Large Datasets & Artifacts (Data should be preprocessed on server or downloaded separately)
-data/
+/data/
 artifacts/
 best_checkpoints/
+manifests/
+profile_output/
 *.pt
 *.pth
 *.h5
@@ -52,3 +54,6 @@ best_checkpoints/
 
 # Exceptions: keep empty placeholder or gitkeep if needed
 !configs/**
+!src/sparse_pod_sim2real/data/
+!src/sparse_pod_sim2real/data/**
+src/sparse_pod_sim2real/data/__pycache__/

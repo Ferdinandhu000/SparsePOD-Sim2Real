@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Optional
 import torch
 import torch.nn as nn
 
@@ -63,7 +63,12 @@ class GrassmannSubspaceAlignment(nn.Module):
             # Move on Grassmann manifold along tangent direction Phi_perp @ A
             perturbed = phi_0 + self.phi_perp @ self.A
             # Retract to Stiefel/Grassmann manifold via QR decomposition
-            q, _ = torch.linalg.qr(perturbed, mode="reduced")
+            q, r = torch.linalg.qr(perturbed, mode="reduced")
+            # Canonicalize column signs: enforce positive diagonal elements on R (diag(R) >= 0 -> +1, else -1)
+            # This ensures continuous identity retraction at A=0 (q == phi_0) and modal coordinate consistency
+            d = torch.diagonal(r, dim1=-2, dim2=-1)
+            signs = torch.where(d >= 0, torch.ones_like(d), -torch.ones_like(d))
+            q = q * signs.unsqueeze(-2)
             return q
         else:
             # Skew-symmetric coordinate rotation (Cayley transform)
@@ -96,4 +101,3 @@ class GrassmannSubspaceAlignment(nn.Module):
         if self.has_perp and hasattr(self, "A"):
             return torch.norm(self.A, p="fro") ** 2
         return torch.tensor(0.0, device=self.s_raw.device)
-

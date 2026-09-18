@@ -11,14 +11,14 @@ Few-shot Extreme-Sparse to Full-field Sim2Real PDE Neural Operator Learning Fram
 Existing Scientific Machine Learning (SciML) and neural operator benchmarks (such as RealPDEBench) predominantly assume full-field dense observations on regular Cartesian grids, supported by abundant real-world training trajectories.
 
 However, in realistic engineering deployments (wind tunnels, aerospace structures, marine vehicles):
-* **Extreme Spatial Sparsity**: Full-field optical diagnostics (PIV) are costly and restricted by optical access. In-situ experiments rely on only **16 to 64 discrete surface probes (sensor coverage < 0.1% of total DOFs)**.
+* **Extreme Spatial Sparsity**: Full-field optical diagnostics (PIV) are costly and restricted by optical access. In-situ experiments rely on only **16 to 64 discrete probes (0.195% to 0.781% of grid locations)**.
 * **Few-shot Scarcity**: Real-world experimental runs are expensive, yielding only **1 to 3 trajectories**.
-* **Operator Collapse**: Standard 23M parameter 3D-UNet and FNO suffer from severe **spatial gradient isolation** and hallucination when fine-tuned on few-shot sparse point observations.
+* **Ill-posed Sparse Forecasting**: Sparse probes leave most spatial degrees of freedom unobserved, so full-field forecasting requires explicit priors and careful empirical comparison.
 
 **SparsePOD-Sim2Real** bridges this gap by decoupling modal geometry from temporal dynamics:
 * Extracts global spatial orthonormal coherent structures from dense numerical simulation (CFD).
 * Employs **Differentiable Gappy-POD** and **Grassmannian Subspace Warping ($\mathbf{W}_{\text{align}}$)** to lift sparse sensor readings into continuous, physically sound full-field flows.
-* Integrates high-capacity 23M 3D-UNet backbones to model high-frequency non-linear residuals, achieving provable physics stability and SOTA accuracy.
+* Integrates a 3D-UNet residual backbone to model high-frequency nonlinear structure. Accuracy and stability are established by the benchmark experiments rather than assumed by the implementation.
 
 ---
 
@@ -41,28 +41,20 @@ pip install -e .
 ## 3. Data Preprocessing & Fast Tensor Caching
 
 ```bash
-# 1. Preprocess raw Arrow/HDF5 data into downsampled 64x128 .pt tensors
-python scripts/preprocess_to_tensors.py \
-    --data-root data/foil \
-    --resolution 64 128 \
-    --num-workers 8
-
-# 2. Extract and precompute POD spatial basis from simulation trajectories
-python scripts/compute_sim_pod_basis.py \
-    --tensor-dir data/foil/tensor_cache_64x128/numerical \
-    --output-file data/foil/pod_basis_64x128.pt \
-    --rank 64
+# Preprocess all 99+99 trajectories, freeze official splits and sensor layouts,
+# and build separate development and all-Sim final POD bases.
+bash scripts/prepare_server_data.sh \
+    data/foil/hf_dataset/real \
+    data/foil/hf_dataset/sim \
+    data/foil/tensor_cache_64x128 \
+    manifests
 ```
 
 ---
 
 ## 4. Benchmark Models & Configurations
 
-* **`Masked-UNet3D`** (`configs/baselines/01_masked_unet3d.yaml`): Official RealPDEBench 23.0M 3D-UNet adapted with input mask channel.
-* **`Masked-FNO3D`** (`configs/baselines/02_masked_fno3d.yaml`): 3D Fourier Neural Operator with masked input.
-* **`Classical Gappy-POD`** (`configs/baselines/03_classical_gappy_pod.yaml`): Traditional Tikhonov-regularized modal reconstruction.
-* **`POD-ResUNet3D-Sparse`** (`configs/our_models/01_pod_res_unet3d_sparse.yaml`): Flagship SOTA combining Gappy-POD physical lifting, Grassmannian $\mathbf{W}_{\text{align}}$ rotation, and 23M UNet3D residual refinement.
-* **`MISF-NO`** (`configs/our_models/02_misf_no_latent.yaml`): Dual-Path Gappy Variational Encoder + Latent Dynamics 1D-FNO.
+The main model and baseline configurations are in `configs/yaml_main_v1`; controlled variants are in `configs/yaml_ablations`. The main set includes Masked-UNet3D, Masked-FNO3D, Classical Gappy-POD, Gappy-LinearAR, POD-ResUNet3D-Sparse, and MISF-NO.
 
 ---
 
@@ -71,10 +63,10 @@ python scripts/compute_sim_pod_basis.py \
 ### Batch Training
 ```bash
 # Linux / Server:
-bash scripts/train_all.sh configs/our_models/ 0
+bash scripts/train_all.sh configs/yaml_main_v1 0 data/foil
 
 # Windows PowerShell:
-.\scripts\train_all.ps1 -ConfigDir configs/our_models -Gpu 0
+.\scripts\train_all.ps1 -ConfigDir configs/yaml_main_v1 -Gpu 0 -DataRoot data/foil
 ```
 
 ### Batch Evaluation & Excel Export
@@ -86,10 +78,7 @@ bash scripts/evaluate_all.sh best_checkpoints data/foil 0
 .\scripts\evaluate_all.ps1 -CkptDir best_checkpoints -DataRoot data/foil -Gpu 0
 ```
 
-Generates:
-* Formatted comparison summary table in console.
-* `evaluation_results_YYYYMMDD_HHMMSS.xlsx` containing Rel-L2, RMSE, MAE, R2, Vorticity Rel-L2, KE Error, and MVPE.
-* Structured JSON for publication plots.
+Evaluation reports ID and OOD fluid, sensor, unobserved-region, channel, vorticity and RMSE metrics, frame accounting, and three-round rollout results. Batch mode writes `evaluation_results_*.xlsx` and the matching JSON file.
 
 ---
 

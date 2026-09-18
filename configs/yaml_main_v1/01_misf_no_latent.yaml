@@ -1,9 +1,22 @@
-# Decoupled SOTA Architecture: MISF-NO (Dual-Path + Latent Dynamics + Subspace Warping)
+# Proposed Decoupled Architecture: MISF-NO (Dual-Path + Latent Dynamics + Subspace Warping)
 exp_name: "02_misf_no_latent"
 model_name: "misf_no"
 
 # Data & Spatial Resolution
 data_root: "data/foil"
+manifest_dir: "manifests"
+allow_manifest_fallback: false
+model_init_seed: 42
+few_shot_traj_seed: 101
+sensor_placement_seed: 202
+num_workers: 4
+pin_memory: true
+trajectory_locality_batches: 8
+val_selection_strategy: "dense_val"
+log_every_n_steps: 50
+# Isotropic grid-cell units (the raw Sim/Real coordinates use different units).
+grid_dx: 1.0
+grid_dy: 1.0
 grid_h: 64
 grid_w: 128
 in_step: 20
@@ -12,7 +25,7 @@ interval: 5
 
 # Sensor Topology & Sparsity
 num_sensors: 64
-sensor_topology: "wall"
+sensor_topology: "group_q_deim"
 
 # Dual-Path & Latent Space Configuration
 pod_rank: 64

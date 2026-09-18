@@ -1,0 +1,121 @@
+{
+  "scope": "CPU diagnostic only; no training; real-frame results are exploratory, not held-out benchmark scores",
+  "torch": "2.14.0+cpu",
+  "unmatched_index_splits": {
+    "train": [
+      "a.h5.pt",
+      "b.h5.pt",
+      "c.h5.pt"
+    ],
+    "val": [
+      "a.h5.pt",
+      "b.h5.pt",
+      "c.h5.pt"
+    ],
+    "test": [
+      "a.h5.pt",
+      "b.h5.pt",
+      "c.h5.pt"
+    ]
+  },
+  "actual_local_sim_splits": {
+    "train": [
+      "10000_0.0.h5.pt"
+    ],
+    "val": [
+      "10000_10.0.h5.pt"
+    ],
+    "test": [
+      "10000_15.0.h5.pt"
+    ]
+  },
+  "batched_coords": "expand(torch.FloatTensor{[1, 1, 2, 5, 2]}, size=[2, 3, 5, 2]): the number of sizes provided (4) must be greater or equal to the number of dimensions in the tensor (5)",
+  "actual_basis_qr": {
+    "relative_basis_change_at_A0": 1.457929015159607,
+    "negative_column_dot_products": 34,
+    "projector_distance_proxy": 0.0030531776137650013
+  },
+  "qr_sign_control_relative_change": 1.4363303184509277,
+  "basis_manifest": {
+    "created_at": "2026-09-16 19:34:26",
+    "total_trajectories": 3,
+    "train_trajectories": [
+      "10000_0.0.h5.pt",
+      "10000_10.0.h5.pt"
+    ],
+    "total_snapshots": 1596,
+    "k": 64,
+    "r": 16,
+    "energy_ratio": 0.8828599087478558,
+    "grid_shape": [
+      64,
+      128
+    ]
+  },
+  "reconstruction_probe": {
+    "wall": {
+      "rel_l2": 0.6691948175430298,
+      "oracle_projection_rel_l2": 0.23397932946681976,
+      "v_rel_l2": 8.19214916229248,
+      "sigma_min": 0.00026268669171258807,
+      "sigma_max": 0.5918555855751038,
+      "condition": 2253.08544921875,
+      "sensor_count": 64,
+      "sensor_speed_mean": 0.28763753175735474
+    },
+    "uniform": {
+      "rel_l2": 0.6907376646995544,
+      "oracle_projection_rel_l2": 0.23397932946681976,
+      "v_rel_l2": 4.634658336639404,
+      "sigma_min": 0.0003792292845901102,
+      "sigma_max": 0.1923341006040573,
+      "condition": 507.1710205078125,
+      "sensor_count": 64,
+      "sensor_speed_mean": 0.2974449694156647
+    },
+    "wake_rake": {
+      "rel_l2": 0.4769343435764313,
+      "oracle_projection_rel_l2": 0.23397932946681976,
+      "v_rel_l2": 4.488319396972656,
+      "sigma_min": 0.0027557630091905594,
+      "sigma_max": 0.24696169793605804,
+      "condition": 89.61644744873047,
+      "sensor_count": 64,
+      "sensor_speed_mean": 0.2968262732028961
+    },
+    "random": {
+      "rel_l2": 0.5565993785858154,
+      "oracle_projection_rel_l2": 0.23397932946681976,
+      "v_rel_l2": 4.399473667144775,
+      "sigma_min": 0.000657159835100174,
+      "sigma_max": 0.22673507034778595,
+      "condition": 345.022705078125,
+      "sensor_count": 64,
+      "sensor_speed_mean": 0.298143595457077
+    }
+  },
+  "mean_only_rel_l2": 0.257904976606369,
+  "dense_persistence_forecast_rel_l2": 0.023515449836850166,
+  "parameter_counts": {
+    "pod_res_unet3d": {
+      "total_real_scalars": 23680530,
+      "trainable_named_modal_prop": 722688
+    },
+    "misf_no": {
+      "total_real_scalars": 175461,
+      "trainable_named_modal_prop": null
+    },
+    "masked_unet3d": {
+      "total_real_scalars": 22978770,
+      "trainable_named_modal_prop": null
+    },
+    "masked_fno3d": {
+      "total_real_scalars": 16786402,
+      "trainable_named_modal_prop": null
+    },
+    "classical_gappy_pod": {
+      "total_real_scalars": 0,
+      "trainable_named_modal_prop": null
+    }
+  }
+}

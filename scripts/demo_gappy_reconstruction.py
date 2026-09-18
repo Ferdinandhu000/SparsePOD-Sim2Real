@@ -33,7 +33,7 @@ def main():
     # 1. Load Ground Truth Test Trajectory (Shape: T, 2, 64, 128)
     if not args.test_tensor.exists():
         raise FileNotFoundError(f"Test tensor not found: {args.test_tensor}")
-    raw_traj = torch.load(args.test_tensor, map_location="cpu")  # (T, 2, H, W)
+    raw_traj = torch.load(args.test_tensor, map_location="cpu", weights_only=True)  # (T, 2, H, W)
     if raw_traj.shape[1] == 2:
         # permute to (T, H, W, 2)
         traj = raw_traj.permute(0, 2, 3, 1).float()
@@ -45,7 +45,7 @@ def main():
     # 2. Load Centered POD Basis
     if not args.pod_basis.exists():
         raise FileNotFoundError(f"POD basis not found: {args.pod_basis}")
-    basis_payload = torch.load(args.pod_basis, map_location=device)
+    basis_payload = torch.load(args.pod_basis, map_location=device, weights_only=True)
     pod_basis = basis_payload["basis"].to(device)
     mean_flow = basis_payload["mean"].to(device)
     k = pod_basis.shape[1]
@@ -115,7 +115,6 @@ def main():
 
     gt_cpu = gt_window.cpu().numpy()
     recon_cpu = recon_window.cpu().numpy()
-    vort_gt_cpu = vort_gt.cpu().numpy()
     vort_recon_cpu = vort_recon.cpu().numpy()
 
     # Determine common colorbar limits
@@ -123,13 +122,6 @@ def main():
     speed_recon = np.sqrt(recon_cpu[..., 0]**2 + recon_cpu[..., 1]**2)
     speed_max = max(speed_gt.max(), speed_recon.max())
     speed_min = min(speed_gt.min(), speed_recon.min())
-
-    row_titles = [
-        "Ground Truth Flow (with 64 Sensors)",
-        "Gappy-POD Reconstruction (Full Field)",
-        "Pointwise Error |Truth - Recon|",
-        "Vorticity Comparison (Recon)",
-    ]
 
     for col_idx, f_idx in enumerate(frame_indices):
         t_label = f"Frame t = {t_start + f_idx}"
@@ -146,7 +138,7 @@ def main():
 
         # Row 2: Gappy-POD Reconstruction
         ax2 = axes[1, col_idx]
-        im2 = ax2.imshow(speed_recon[f_idx], cmap="turbo", vmin=speed_min, vmax=speed_max, origin="lower")
+        ax2.imshow(speed_recon[f_idx], cmap="turbo", vmin=speed_min, vmax=speed_max, origin="lower")
         patch2 = Polygon(foil_polygon, closed=True, facecolor="#212529", edgecolor="none", zorder=2)
         ax2.add_patch(patch2)
         ax2.set_title(f"Gappy-POD Recon ({t_label})", fontsize=11, fontweight="bold")
@@ -169,7 +161,7 @@ def main():
         im4 = ax4.imshow(vort_recon_cpu[f_idx], cmap="coolwarm", vmin=-0.08, vmax=0.08, origin="lower")
         patch4 = Polygon(foil_polygon, closed=True, facecolor="#212529", edgecolor="none", zorder=2)
         ax4.add_patch(patch4)
-        ax4.set_title(f"Reconstructed Vorticity (Wake)", fontsize=11, fontweight="bold")
+        ax4.set_title("Reconstructed Vorticity (Wake)", fontsize=11, fontweight="bold")
         ax4.set_xticks([])
         ax4.set_yticks([])
 

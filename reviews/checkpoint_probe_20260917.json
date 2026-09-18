@@ -1,0 +1,32 @@
+{
+  "scope": "Exploratory 20-frame forecast only, existing one-epoch Sim checkpoint, no Real adaptation, not a benchmark or hyperparameter selection",
+  "full_input_oracle": {
+    "rel_l2": 0.26867708563804626,
+    "v_rel_l2": 2.626739263534546
+  },
+  "sparse_current": {
+    "rel_l2": 0.36525699496269226,
+    "v_rel_l2": 2.9215118885040283
+  },
+  "sparse_sign_corrected": {
+    "rel_l2": 0.33857670426368713,
+    "v_rel_l2": 2.6085333824157715
+  },
+  "projection_window_diagnostics": [
+    {
+      "file": "10000_0.0.h5.pt",
+      "oracle_rel_l2": 0.48395267128944397,
+      "wall_gappy_rel_l2": 1.05417001247406
+    },
+    {
+      "file": "10000_10.0.h5.pt",
+      "oracle_rel_l2": 0.2359858602285385,
+      "wall_gappy_rel_l2": 0.6697697043418884
+    },
+    {
+      "file": "10000_15.0.h5.pt",
+      "oracle_rel_l2": 0.23469099402427673,
+      "wall_gappy_rel_l2": 0.6756085753440857
+    }
+  ]
+}

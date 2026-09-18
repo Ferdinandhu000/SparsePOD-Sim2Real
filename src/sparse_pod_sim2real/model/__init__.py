@@ -7,6 +7,7 @@ import torch.nn as nn
 from .baselines.masked_unet import MaskedUNet3D
 from .baselines.masked_fno import MaskedFNO3D
 from .baselines.classical_gappy import ClassicalGappyPOD
+from .baselines.gappy_linear_ar import GappyLinearAR
 from .our_model.pod_res_unet import PODResUNet3DSparse
 from .our_model.misf_no import MISFNO
 
@@ -23,6 +24,9 @@ def load_model(
     h = config.get("grid_h", 64)
     w = config.get("grid_w", 128)
     k = config.get("pod_rank", 64)
+    if pod_basis is not None:
+        avail_k = pod_basis["basis"].shape[1] if isinstance(pod_basis, dict) else pod_basis.shape[1]
+        k = min(k, avail_k)
 
     if name in ("masked_unet3d", "masked_unet"):
         dim = config.get("unet_dim", 64)
@@ -67,6 +71,19 @@ def load_model(
             w=w,
             in_time=in_time,
             out_time=out_time,
+        )
+
+    elif name in ("gappy_linear_ar", "gappy_ar"):
+        if pod_basis is None or sensor_indices is None:
+            raise ValueError("pod_basis and sensor_indices must be provided for GappyLinearAR.")
+        return GappyLinearAR(
+            pod_basis=pod_basis,
+            sensor_indices=sensor_indices,
+            h=h,
+            w=w,
+            out_time=out_time,
+            rank=k,
+            reg_lambda=config.get("reg_lambda", 1e-4),
         )
 
     elif name in ("pod_res_unet3d", "pod_res_unet"):
@@ -120,6 +137,7 @@ __all__ = [
     "MaskedUNet3D",
     "MaskedFNO3D",
     "ClassicalGappyPOD",
+    "GappyLinearAR",
     "PODResUNet3DSparse",
     "MISFNO",
 ]

@@ -5,9 +5,15 @@ import argparse
 import json
 import os
 from pathlib import Path
+import sys
 import time
 
-from sparse_pod_sim2real.data.preprocess import preprocess_domain
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from sparse_pod_sim2real.data.preprocess import preprocess_domain  # noqa: E402
 
 
 def main():
@@ -19,7 +25,12 @@ def main():
     parser.add_argument("--output-dir", type=Path, default=None, help="Output root directory for cached tensors")
     parser.add_argument("--prefix-frames", type=float, default=None, help="Optional frame cutoff (default None: all frames)")
     parser.add_argument("--overwrite", action="store_true", help="Force overwrite existing .pt files")
-    parser.add_argument("--num-workers", type=int, default=max(1, (os.cpu_count() or 4) // 2), help="Worker processes")
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=min(4, max(1, (os.cpu_count() or 4) // 2)),
+        help="Conversion workers; keep modest because each worker materializes one raw trajectory",
+    )
     args = parser.parse_args()
 
     res = tuple(args.resolution)
@@ -44,11 +55,13 @@ def main():
                 break
 
     if real_dir is None or not real_dir.exists():
-        print(f"Notice: Real source directory not found at default locations. Please ensure data is placed in {args.data_root}")
-        return
+        raise FileNotFoundError(
+            f"Real source directory not found. Place data under {args.data_root} or pass --real-dir."
+        )
     if sim_dir is None or not sim_dir.exists():
-        print(f"Notice: Sim source directory not found at default locations. Please ensure data is placed in {args.data_root}")
-        return
+        raise FileNotFoundError(
+            f"Sim source directory not found. Place data under {args.data_root} or pass --sim-dir."
+        )
 
     # 2. Resolve output directory
     if args.output_dir is not None:
@@ -80,7 +93,13 @@ def main():
         "real_trajectories": real_meta,
         "sim_trajectories": sim_meta,
     }
-    (out_root / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    manifest_path = out_root / "manifest.json"
+    temporary_manifest = manifest_path.with_name(f".{manifest_path.name}.tmp.{os.getpid()}")
+    try:
+        temporary_manifest.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        os.replace(temporary_manifest, manifest_path)
+    finally:
+        temporary_manifest.unlink(missing_ok=True)
     print(f"Successfully processed {len(real_meta)} real and {len(sim_meta)} sim trajectories in {elapsed:.1f}s.")
 
 
